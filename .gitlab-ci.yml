@@ -1,0 +1,103 @@
+image: docker:stable
+
+stages:
+- pre-build
+- build
+- test
+- deploy
+- notificacao
+
+
+ build-docker:
+    services:
+    - docker:dind
+    retry: 2
+    before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
+
+    stage: pre-build
+    script: 
+    - docker build -t minha-imagem .
+    - docker tag minha-imagem henth/bytecode:latest
+    - docker push henth/bytecode:latest
+
+build-project:
+    image: henth/bytecode:latest
+    retry: 2
+    services:
+    - docker:dind
+    - mysql:5.7
+    variables:
+        MYSQL_USER: $DB_USER
+        MYSQL_PASSWORD: $DB_PASSWORD
+        MYSQL_DATABASE: $DB_DATABASE
+        MYSQL_ROOT_PASSWORD: $DB_ROOT_PASSWORD
+
+        DB_NAME: $DB_DATABASE
+        DB_USER: $DB_USER
+        DB_PASSWORD: $DB_PASSWORD
+        DB_PORT: '3306'
+        DB_HOST: 'mysql'
+        SECRET_KEY: 'r*5ltfzw-61ksdm41fuul8+hxs$86yo9%k1%k=(!@=-wv4qtyv'
+
+    stage: build
+    image: henth/bytecode:latest
+    tags:
+    - executor-tarefas
+    dependencies:
+    - build-docker
+    script:
+    - python manage.py makemigrations
+    - python manage.py migrate
+
+test-project:
+    image: henth/bytecode:latest
+    stage: test
+    services:
+    - docker:dind
+    - mysql:5.7
+    variables:
+        MYSQL_USER: $DB_USER
+        MYSQL_PASSWORD: $DB_PASSWORD
+        MYSQL_DATABASE: $DB_DATABASE
+        MYSQL_ROOT_PASSWORD: $DB_ROOT_PASSWORD
+
+        DB_NAME: $DB_DATABASE
+        DB_USER: $DB_USER
+        DB_PASSWORD: $DB_PASSWORD
+        DB_PORT: '3306'
+        DB_HOST: 'mysql'
+        SECRET_KEY: 'r*5ltfzw-61ksdm41fuul8+hxs$86yo9%k1%k=(!@=-wv4qtyv'
+    dependencies: 
+    - build-project
+    tags:
+    - executor-tarefas
+    script:
+    - python -m unittest setUp
+
+deploy-project:
+    stage: deploy
+    tags:
+    - executor-deploy
+    dependencies:
+    - test-project
+    script:
+    - tar cfz arquivos.tgz *
+    - scp arquivos.tgz root@172.27.140.128:/opt/deploy
+    - ssh root@172.27.140.128 'cd /opt/deploy; tar xfz arquivos.tgz; /usr/bin/docker-compose up -d'
+
+notificao-sucesso:
+    stage: notificacao
+    tags:
+    - executor-deploy
+    when: one_success
+    script:
+    - echo "Pipeline Concluída com sucesso!"
+
+notificao-falhas:
+    stage: notificacao
+    tags:
+    - executor-deploy
+    when: one_failed
+    script:
+    - echo "Pipeline Falhou!"
